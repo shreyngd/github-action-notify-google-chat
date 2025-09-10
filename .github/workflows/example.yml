@@ -1,0 +1,77 @@
+name: Example CI/CD with Google Chat Notifications
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch full history for commit messages
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install dependencies
+        run: |
+          echo "Installing dependencies..."
+          # npm install
+
+      - name: Run tests
+        run: |
+          echo "Running tests..."
+          # npm test
+
+      - name: Build project
+        run: |
+          echo "Building project..."
+          # npm run build
+
+      - name: Notify Google Chat
+        if: always() # Always run, regardless of previous step results
+        uses: ./ # Use the local action (for this example)
+        with:
+          google_chat_token: ${{ secrets.GOOGLE_CHAT_TOKEN }}
+          space_id: ${{ secrets.GOOGLE_CHAT_SPACE_ID }}
+          status: ${{ job.status }}
+          job_name: "CI Tests"
+
+  deploy:
+    needs: test
+    if: success() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production..."
+          # Add your deployment commands here
+
+      - name: Notify deployment success
+        if: success()
+        uses: ./
+        with:
+          google_chat_token: ${{ secrets.GOOGLE_CHAT_TOKEN }}
+          space_id: ${{ secrets.GOOGLE_CHAT_SPACE_ID }}
+          status: "success"
+          job_name: "Production Deployment"
+
+      - name: Notify deployment failure
+        if: failure()
+        uses: ./
+        with:
+          google_chat_token: ${{ secrets.GOOGLE_CHAT_TOKEN }}
+          space_id: ${{ secrets.GOOGLE_CHAT_SPACE_ID }}
+          status: "failure"
+          job_name: "Production Deployment"
+          failure_reason: "Deployment failed. Please check the deployment logs and try again."

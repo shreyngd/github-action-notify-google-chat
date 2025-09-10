@@ -127,7 +127,7 @@ runs:
                   },
                   {
                     "decoratedText": {
-                      "icon": {"materialIcon": {"name": "branch_right"}},
+                      "icon": {"materialIcon": {"name": "fork_right"}},
                       "topLabel": "Branch",
                       "text": "$BRANCH"
                     }
