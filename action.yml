@@ -25,7 +25,7 @@ runs:
           echo "_No commits found for this push event._" >> $GITHUB_OUTPUT
         else
           for commit in $(jq -r '.[] | @base64' <<< "$COMMITS_JSON"); do
-            _jq() { echo $commit | base64 --decode | jq -r $1; }
+            _jq() { echo "$commit" | base64 --decode | jq -r "$1"; }
             SHA=$(_jq '.id' | cut -c1-7)
             MESSAGE=$(_jq '.message' | head -c 80)
             AUTHOR=$(_jq '.author.name')
@@ -55,7 +55,60 @@ runs:
         FAILURE_REASON="${{ steps.failure-reason.outputs.reason }}"
         LOGS_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-        PAYLOAD=$(cat <<EOF
+        # Build commits section
+        COMMITS_SECTION=""
+        if [ -n "$COMMITS_JSON" ]; then
+          COMMITS_SECTION=$(cat <<'COMMITS'
+          ,
+          {
+            "header": "Commits in this push",
+            "widgets": [
+              {
+                "textParagraph": {
+                  "text": $COMMITS_JSON
+                }
+              }
+            ]
+          }
+COMMITS
+          )
+        fi
+
+        # Build failure section
+        FAILURE_SECTION=""
+        if [ "${{ job.status }}" != "success" ] && [ -n "$FAILURE_REASON" ]; then
+          FAILURE_SECTION=$(cat <<'FAILURE'
+          ,
+          {
+            "header": "Failure Reason",
+            "widgets": [
+              {
+                "textParagraph": {
+                  "text": "$FAILURE_REASON"
+                }
+              },
+              {
+                "buttonList": {
+                  "buttons": [
+                    {
+                      "text": "View Logs",
+                      "onClick": {
+                        "openLink": {
+                          "url": "$LOGS_URL"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+FAILURE
+          )
+        fi
+
+        # Build final payload
+        PAYLOAD=$(cat <<'EOF'
         {
           "cardsV2": [
             {
@@ -91,58 +144,17 @@ runs:
                       }
                     ]
                   }
-                  $(if [ -n "${COMMITS_JSON}" ]; then
-                    cat <<COMMITS_SECTION
-                  ,
-                  {
-                    "header": "Commits in this push",
-                    "widgets": [
-                      {
-                        "textParagraph": {
-                          "text": $COMMITS_JSON
-                        }
-                      }
-                    ]
-                  }
-                  COMMITS_SECTION
-                  fi)
-                  $(if [ "${{ job.status }}" != "success" ] && [ -n "$FAILURE_REASON" ]; then
-                    cat <<FAIL_SECTION
-                  ,
-                  {
-                    "header": "Failure Reason",
-                    "widgets": [
-                      {
-                        "textParagraph": {
-                          "text": "$FAILURE_REASON"
-                        }
-                      },
-                      {
-                        "buttonList": {
-                          "buttons": [
-                            {
-                              "text": "View Logs",
-                              "onClick": {
-                                "openLink": {
-                                  "url": "$LOGS_URL"
-                                }
-                              }
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                  FAIL_SECTION
-                  fi)
+                  $COMMITS_SECTION
+                  $FAILURE_SECTION
                 ]
               }
             }
           ]
         }
-        EOF
+EOF
         )
 
+        # Send to Google Chat
         curl -X POST \
           -H "Content-Type: application/json" \
           -d "${PAYLOAD}" \
