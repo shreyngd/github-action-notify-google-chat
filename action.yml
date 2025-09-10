@@ -42,6 +42,55 @@ runs:
       run: |
         echo "reason=Job ${{ github.job }} failed — check logs" >> $GITHUB_OUTPUT
 
+    name: "Notify Google Chat"
+description: "Send GitHub Actions build status to Google Chat"
+
+inputs:
+  webhook-url:
+    description: "Google Chat webhook URL"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    # ----------------------------------
+    # Collect commit list
+    # ----------------------------------
+    - name: Collect commits
+      id: commits
+      shell: bash
+      run: |
+        echo "list<<EOF" >> $GITHUB_OUTPUT
+
+        COMMITS_JSON='${{ toJson(github.event.commits) }}'
+
+        if [ "$COMMITS_JSON" = "null" ] || [ "$COMMITS_JSON" = "[]" ]; then
+          echo "_No commits found for this push event._" >> $GITHUB_OUTPUT
+        else
+          for commit in $(jq -r '.[] | @base64' <<< "$COMMITS_JSON"); do
+            _jq() { echo $commit | base64 --decode | jq -r $1; }
+            SHA=$(_jq '.id' | cut -c1-7)
+            MESSAGE=$(_jq '.message' | head -c 80)
+            AUTHOR=$(_jq '.author.name')
+            echo "- [${SHA}](https://github.com/${{ github.repository }}/commit/${SHA}): ${MESSAGE} (by ${AUTHOR})" >> $GITHUB_OUTPUT
+          done
+        fi
+
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    # ----------------------------------
+    # Capture failure reason (if any)
+    # ----------------------------------
+    - name: Capture failure reason
+      id: failure-reason
+      if: failure()
+      shell: bash
+      run: |
+        echo "reason=Workflow failed. Check logs for details." >> $GITHUB_OUTPUT
+
+    # ----------------------------------
+    # Send notification
+    # ----------------------------------
     - name: Send notification to Google Chat
       if: always()
       shell: bash
@@ -55,10 +104,12 @@ runs:
         FAILURE_REASON="${{ steps.failure-reason.outputs.reason }}"
         LOGS_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+        # -------------------------
         # Build commits section
+        # -------------------------
         COMMITS_SECTION=""
         if [ -n "$COMMITS_JSON" ]; then
-          COMMITS_SECTION=$(cat <<'COMMITS'
+          COMMITS_SECTION=$(cat <<COMMITS
           ,
           {
             "header": "Commits in this push",
@@ -74,10 +125,12 @@ COMMITS
           )
         fi
 
+        # -------------------------
         # Build failure section
+        # -------------------------
         FAILURE_SECTION=""
         if [ "${{ job.status }}" != "success" ] && [ -n "$FAILURE_REASON" ]; then
-          FAILURE_SECTION=$(cat <<'FAILURE'
+          FAILURE_SECTION=$(cat <<FAILURE
           ,
           {
             "header": "Failure Reason",
@@ -107,8 +160,10 @@ FAILURE
           )
         fi
 
+        # -------------------------
         # Build final payload
-        PAYLOAD=$(cat <<'EOF'
+        # -------------------------
+        PAYLOAD=$(cat <<EOF
         {
           "cardsV2": [
             {
@@ -154,7 +209,9 @@ FAILURE
 EOF
         )
 
+        # -------------------------
         # Send to Google Chat
+        # -------------------------
         curl -X POST \
           -H "Content-Type: application/json" \
           -d "${PAYLOAD}" \
