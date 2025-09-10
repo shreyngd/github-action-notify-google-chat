@@ -1,0 +1,98 @@
+name: "Google Chat Notify"
+author: "Your Name"
+description: "Send build/deploy notifications to Google Chat with status, branch, actor, and commits."
+branding:
+  icon: "message-square"
+  color: "blue"
+
+inputs:
+  webhook-url:
+    description: "Google Chat Incoming Webhook URL"
+    required: true
+  status:
+    description: "Build status (Success/Failure)"
+    required: true
+  branch:
+    description: "Branch name"
+    required: true
+  actor:
+    description: "User who triggered workflow"
+    required: true
+  repository:
+    description: "Repository name"
+    required: true
+  commits:
+    description: "List of commits in plain text/Markdown"
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Send notification to Google Chat
+      shell: bash
+      run: |
+        COMMITS_JSON=$(echo "${{ inputs.commits }}" | jq -Rs .)
+
+        PAYLOAD=$(cat <<EOF
+        {
+          "cardsV2": [
+            {
+              "cardId": "build-status",
+              "card": {
+                "header": {
+                  "title": "GitHub Build Notification",
+                  "subtitle": "${{ inputs.repository }}",
+                  "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                  "imageType": "CIRCLE"
+                },
+                "sections": [
+                  {
+                    "header": "Build Details",
+                    "widgets": [
+                      {
+                        "keyValue": {
+                          "topLabel": "Branch",
+                          "content": "${{ inputs.branch }}"
+                        }
+                      },
+                      {
+                        "keyValue": {
+                          "topLabel": "Triggered by",
+                          "content": "${{ inputs.actor }}"
+                        }
+                      },
+                      {
+                        "keyValue": {
+                          "topLabel": "Status",
+                          "content": "${{ inputs.status }}"
+                        }
+                      }
+                    ]
+                  }
+                  $(if [ -n "${{ inputs.commits }}" ]; then
+                    cat <<COMMITS_SECTION
+                  ,
+                  {
+                    "header": "Commits in this push",
+                    "widgets": [
+                      {
+                        "textParagraph": {
+                          "text": $COMMITS_JSON
+                        }
+                      }
+                    ]
+                  }
+                  COMMITS_SECTION
+                  fi)
+                ]
+              }
+            }
+          ]
+        }
+        EOF
+        )
+
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d "${PAYLOAD}" \
+          "${{ inputs.webhook-url }}"
