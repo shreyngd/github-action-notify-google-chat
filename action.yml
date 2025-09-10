@@ -18,13 +18,21 @@ runs:
       shell: bash
       run: |
         echo "list<<EOF" >> $GITHUB_OUTPUT
-        for commit in $(jq -r '.commits[] | @base64' <<< '${{ toJson(github.event.commits) }}'); do
-          _jq() { echo $commit | base64 --decode | jq -r $1; }
-          SHA=$(_jq '.id' | cut -c1-7)
-          MESSAGE=$(_jq '.message' | head -c 80)
-          AUTHOR=$(_jq '.author.name')
-          echo "- [${SHA}](https://github.com/${{ github.repository }}/commit/${SHA}): ${MESSAGE} (by ${AUTHOR})" >> $GITHUB_OUTPUT
-        done
+
+        COMMITS_JSON='${{ toJson(github.event.commits) }}'
+
+        if [ "$COMMITS_JSON" = "null" ] || [ "$COMMITS_JSON" = "[]" ]; then
+          echo "_No commits found for this push event._" >> $GITHUB_OUTPUT
+        else
+          for commit in $(jq -r '.[] | @base64' <<< "$COMMITS_JSON"); do
+            _jq() { echo $commit | base64 --decode | jq -r $1; }
+            SHA=$(_jq '.id' | cut -c1-7)
+            MESSAGE=$(_jq '.message' | head -c 80)
+            AUTHOR=$(_jq '.author.name')
+            echo "- [${SHA}](https://github.com/${{ github.repository }}/commit/${SHA}): ${MESSAGE} (by ${AUTHOR})" >> $GITHUB_OUTPUT
+          done
+        fi
+
         echo "EOF" >> $GITHUB_OUTPUT
 
     - name: Capture failure reason
@@ -45,6 +53,7 @@ runs:
 
         COMMITS_JSON=$(echo "${{ steps.commits.outputs.list }}" | jq -Rs .)
         FAILURE_REASON="${{ steps.failure-reason.outputs.reason }}"
+        LOGS_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
         PAYLOAD=$(cat <<EOF
         {
@@ -106,6 +115,20 @@ runs:
                       {
                         "textParagraph": {
                           "text": "$FAILURE_REASON"
+                        }
+                      },
+                      {
+                        "buttonList": {
+                          "buttons": [
+                            {
+                              "text": "View Logs",
+                              "onClick": {
+                                "openLink": {
+                                  "url": "$LOGS_URL"
+                                }
+                              }
+                            }
+                          ]
                         }
                       }
                     ]
