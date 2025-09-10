@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       test_status:
-        description: 'Test status to send'
+        description: "Test status to send"
         required: true
-        default: 'success'
+        default: "success"
         type: choice
         options:
-        - success
-        - failure
-        - cancelled
-        - skipped
+          - success
+          - failure
+          - cancelled
+          - skipped
 
 jobs:
   test-notification:
@@ -21,18 +21,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
+
       - name: Simulate build step
         run: |
           echo "Simulating build process..."
           sleep 2
           echo "Build completed!"
-          
+
       - name: Test Google Chat Notification
         uses: ./
         with:
           google_chat_token: ${{ secrets.GOOGLE_CHAT_TOKEN }}
           space_id: ${{ secrets.GOOGLE_CHAT_SPACE_ID }}
           status: ${{ github.event.inputs.test_status }}
-          job_name: 'Test Notification'
-          failure_reason: 'This is a test failure message to demonstrate how failure notifications look.'
+          job_name: "Test Notification"
+          failure_reason: "This is a test failure message to demonstrate how failure notifications look."

@@ -1,42 +1,39 @@
-name: 'Google Chat Notification'
-description: 'Send build status notifications to Google Chat with card format'
-author: 'shreyngd'
+name: "Google Chat Notification"
+description: "Send build status notifications to Google Chat with card format"
+author: "shreyngd"
 
 inputs:
   google_chat_token:
-    description: 'Google Chat webhook token (the part after /v1/spaces/.../messages?key=)'
-    required: true
-  space_id:
-    description: 'Google Chat space ID'
+    description: "Google Chat webhook token (the part after /v1/spaces/.../messages?key=)"
     required: true
   status:
-    description: 'Build status (success, failure, cancelled, skipped)'
+    description: "Build status (success, failure, cancelled, skipped)"
     required: true
     default: ${{ job.status }}
   job_name:
-    description: 'Job name to display in the notification'
+    description: "Job name to display in the notification"
     required: false
     default: ${{ github.job }}
   actor:
-    description: 'User who triggered the build'
+    description: "User who triggered the build"
     required: false
     default: ${{ github.actor }}
   repository:
-    description: 'Repository name'
+    description: "Repository name"
     required: false
     default: ${{ github.repository }}
   branch:
-    description: 'Branch name'
+    description: "Branch name"
     required: false
     default: ${{ github.ref_name }}
   commit_sha:
-    description: 'Commit SHA'
+    description: "Commit SHA"
     required: false
     default: ${{ github.sha }}
   failure_reason:
-    description: 'Failure reason for failed builds'
+    description: "Failure reason for failed builds"
     required: false
-    default: 'Build failed'
+    default: "Build failed"
 
 runs:
   using: "composite"
@@ -88,7 +85,6 @@ runs:
       shell: bash
       env:
         GOOGLE_CHAT_TOKEN: ${{ inputs.google_chat_token }}
-        SPACE_ID: ${{ inputs.space_id }}
         STATUS: ${{ inputs.status }}
         JOB_NAME: ${{ inputs.job_name }}
         ACTOR: ${{ inputs.actor }}
@@ -245,13 +241,13 @@ runs:
         fi
 
         # Send the message to Google Chat
-        WEBHOOK_URL="https://chat.googleapis.com/v1/spaces/$SPACE_ID/messages?key=$GOOGLE_CHAT_TOKEN"
-        
+        WEBHOOK_URL="$GOOGLE_CHAT_TOKEN"
+
         echo "Sending notification to Google Chat..."
         RESPONSE=$(curl -s -X POST "$WEBHOOK_URL" \
           -H "Content-Type: application/json" \
           -d "$CARD_CONTENT")
-        
+
         if [[ $? -eq 0 ]]; then
           echo "✅ Notification sent successfully!"
           echo "Response: $RESPONSE"
@@ -262,5 +258,5 @@ runs:
         fi
 
 branding:
-  icon: 'message-circle'
-  color: 'blue'
+  icon: "message-circle"
+  color: "blue"
