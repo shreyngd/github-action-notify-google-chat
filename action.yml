@@ -1,174 +1,266 @@
-name: "Notify Google Chat"
-description: "Send GitHub Actions build status to Google Chat"
+name: 'Google Chat Notification'
+description: 'Send build status notifications to Google Chat with card format'
+author: 'shreyngd'
 
 inputs:
-  webhook-url:
-    description: "Google Chat webhook URL"
+  google_chat_token:
+    description: 'Google Chat webhook token (the part after /v1/spaces/.../messages?key=)'
     required: true
+  space_id:
+    description: 'Google Chat space ID'
+    required: true
+  status:
+    description: 'Build status (success, failure, cancelled, skipped)'
+    required: true
+    default: ${{ job.status }}
+  job_name:
+    description: 'Job name to display in the notification'
+    required: false
+    default: ${{ github.job }}
+  actor:
+    description: 'User who triggered the build'
+    required: false
+    default: ${{ github.actor }}
+  repository:
+    description: 'Repository name'
+    required: false
+    default: ${{ github.repository }}
+  branch:
+    description: 'Branch name'
+    required: false
+    default: ${{ github.ref_name }}
+  commit_sha:
+    description: 'Commit SHA'
+    required: false
+    default: ${{ github.sha }}
+  failure_reason:
+    description: 'Failure reason for failed builds'
+    required: false
+    default: 'Build failed'
 
 runs:
   using: "composite"
   steps:
-    # ----------------------------------
-    # Collect commit list
-    # ----------------------------------
-    - name: Collect commits
-      id: commits
+    - name: Get commit messages
+      id: get_commits
       shell: bash
       run: |
-        echo "list<<EOF" >> $GITHUB_OUTPUT
-
-        COMMITS_JSON='${{ toJson(github.event.commits) }}'
-
-        if [ "$COMMITS_JSON" = "null" ] || [ "$COMMITS_JSON" = "[]" ]; then
-          echo "_No commits found for this push event._" >> $GITHUB_OUTPUT
-        else
-          for commit in $(jq -r '.[] | @base64' <<< "$COMMITS_JSON"); do
-            _jq() { echo $commit | base64 --decode | jq -r $1; }
-            SHA=$(_jq '.id' | cut -c1-7)
-            MESSAGE=$(_jq '.message' | head -c 80)
-            AUTHOR=$(_jq '.author.name')
-            echo "- [${SHA}](https://github.com/${{ github.repository }}/commit/${SHA}): ${MESSAGE} (by ${AUTHOR})" >> $GITHUB_OUTPUT
-          done
+        if [[ "${{ inputs.status }}" == "success" ]]; then
+          # Get commit messages from the push event or last commit
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # For push events, get commits from the event
+            COMMITS=$(echo '${{ toJson(github.event.commits) }}' | jq -r '.[].message' | head -5 | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+          else
+            # For other events, get the last commit message
+            COMMITS=$(git log -1 --pretty=format:"%s" | sed 's/"/\\"/g')
+          fi
+          echo "commit_messages=$COMMITS" >> $GITHUB_OUTPUT
         fi
 
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    # ----------------------------------
-    # Capture failure reason (if any)
-    # ----------------------------------
-    - name: Capture failure reason
-      id: failure-reason
-      if: failure()
+    - name: Format card color
+      id: format_color
       shell: bash
       run: |
-        echo "reason=Workflow failed. Check logs for details." >> $GITHUB_OUTPUT
+        case "${{ inputs.status }}" in
+          success)
+            echo "color=#28a745" >> $GITHUB_OUTPUT
+            echo "status_icon=✅" >> $GITHUB_OUTPUT
+            ;;
+          failure)
+            echo "color=#dc3545" >> $GITHUB_OUTPUT
+            echo "status_icon=❌" >> $GITHUB_OUTPUT
+            ;;
+          cancelled)
+            echo "color=#6c757d" >> $GITHUB_OUTPUT
+            echo "status_icon=⏹️" >> $GITHUB_OUTPUT
+            ;;
+          skipped)
+            echo "color=#ffc107" >> $GITHUB_OUTPUT
+            echo "status_icon=⏭️" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "color=#007bff" >> $GITHUB_OUTPUT
+            echo "status_icon=ℹ️" >> $GITHUB_OUTPUT
+            ;;
+        esac
 
-    # ----------------------------------
-    # Send notification
-    # ----------------------------------
-    - name: Send notification to Google Chat
-      if: always()
+    - name: Send Google Chat notification
       shell: bash
+      env:
+        GOOGLE_CHAT_TOKEN: ${{ inputs.google_chat_token }}
+        SPACE_ID: ${{ inputs.space_id }}
+        STATUS: ${{ inputs.status }}
+        JOB_NAME: ${{ inputs.job_name }}
+        ACTOR: ${{ inputs.actor }}
+        REPOSITORY: ${{ inputs.repository }}
+        BRANCH: ${{ inputs.branch }}
+        COMMIT_SHA: ${{ inputs.commit_sha }}
+        FAILURE_REASON: ${{ inputs.failure_reason }}
+        COMMIT_MESSAGES: ${{ steps.get_commits.outputs.commit_messages }}
+        COLOR: ${{ steps.format_color.outputs.color }}
+        STATUS_ICON: ${{ steps.format_color.outputs.status_icon }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        STATUS="✅ Success"
-        if [ "${{ job.status }}" != "success" ]; then
-          STATUS="❌ Failed"
-        fi
-
-        COMMITS_JSON=$(echo "${{ steps.commits.outputs.list }}" | jq -Rs .)
-        FAILURE_REASON="${{ steps.failure-reason.outputs.reason }}"
-        LOGS_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-        # -------------------------
-        # Build commits section
-        # -------------------------
-        COMMITS_SECTION=""
-        if [ -n "$COMMITS_JSON" ]; then
-          COMMITS_SECTION=$(cat <<COMMITS
-          ,
-          {
-            "header": "Commits in this push",
-            "widgets": [
-              {
-                "textParagraph": {
-                  "text": $COMMITS_JSON
-                }
-              }
-            ]
-          }
-COMMITS
-          )
-        fi
-
-        # -------------------------
-        # Build failure section
-        # -------------------------
-        FAILURE_SECTION=""
-        if [ "${{ job.status }}" != "success" ] && [ -n "$FAILURE_REASON" ]; then
-          FAILURE_SECTION=$(cat <<FAILURE
-          ,
-          {
-            "header": "Failure Reason",
-            "widgets": [
-              {
-                "textParagraph": {
-                  "text": "$FAILURE_REASON"
-                }
+        # Create the card payload based on status
+        if [[ "$STATUS" == "success" ]]; then
+          CARD_CONTENT=$(cat <<EOF
+        {
+          "cardsV2": [{
+            "cardId": "build-notification",
+            "card": {
+              "header": {
+                "title": "$STATUS_ICON Build Successful",
+                "subtitle": "$REPOSITORY"
+              },
+              "sections": [{
+                "header": "Build Details",
+                "widgets": [
+                  {
+                    "decoratedText": {
+                      "icon": {"knownIcon": "PERSON"},
+                      "topLabel": "Triggered by",
+                      "text": "$ACTOR"
+                    }
+                  },
+                  {
+                    "decoratedText": {
+                      "icon": {"knownIcon": "BOOKMARK"},
+                      "topLabel": "Job",
+                      "text": "$JOB_NAME"
+                    }
+                  },
+                  {
+                    "decoratedText": {
+                      "icon": {"materialIcon": {"name": "branch_right"}},
+                      "topLabel": "Branch",
+                      "text": "$BRANCH"
+                    }
+                  },
+                  {
+                    "decoratedText": {
+                      "icon": {"materialIcon": {"name": "commit"}},
+                      "topLabel": "Commit",
+                      "text": "${COMMIT_SHA:0:7}"
+                    }
+                  }
+                ]
               },
               {
-                "buttonList": {
-                  "buttons": [
-                    {
-                      "text": "View Logs",
+                "header": "Recent Commits",
+                "widgets": [{
+                  "textParagraph": {
+                    "text": "$COMMIT_MESSAGES"
+                  }
+                }]
+              },
+              {
+                "widgets": [{
+                  "buttonList": {
+                    "buttons": [{
+                      "text": "View Build",
                       "onClick": {
                         "openLink": {
-                          "url": "$LOGS_URL"
+                          "url": "$RUN_URL"
                         }
                       }
+                    }]
+                  }
+                }]
+              }]
+            }
+          }]
+        }
+        EOF
+        )
+        else
+          CARD_CONTENT=$(cat <<EOF
+        {
+          "cardsV2": [{
+            "cardId": "build-notification",
+            "card": {
+              "header": {
+                "title": "$STATUS_ICON Build Failed",
+                "subtitle": "$REPOSITORY"
+              },
+              "sections": [{
+                "header": "Build Details",
+                "widgets": [
+                  {
+                    "decoratedText": {
+                      "icon": {"knownIcon": "PERSON"},
+                      "topLabel": "Triggered by",
+                      "text": "$ACTOR"
                     }
-                  ]
-                }
-              }
-            ]
-          }
-FAILURE
-          )
+                  },
+                  {
+                    "decoratedText": {
+                      "icon": {"knownIcon": "BOOKMARK"},
+                      "topLabel": "Job",
+                      "text": "$JOB_NAME"
+                    }
+                  },
+                  {
+                    "decoratedText": {
+                      "icon": {"materialIcon": {"name": "branch_right"}},
+                      "topLabel": "Branch",
+                      "text": "$BRANCH"
+                    }
+                  },
+                  {
+                    "decoratedText": {
+                      "icon": {"materialIcon": {"name": "commit"}},
+                      "topLabel": "Commit",
+                      "text": "${COMMIT_SHA:0:7}"
+                    }
+                  }
+                ]
+              },
+              {
+                "header": "Failure Details",
+                "widgets": [{
+                  "textParagraph": {
+                    "text": "$FAILURE_REASON"
+                  }
+                }]
+              },
+              {
+                "widgets": [{
+                  "buttonList": {
+                    "buttons": [{
+                      "text": "View Build",
+                      "onClick": {
+                        "openLink": {
+                          "url": "$RUN_URL"
+                        }
+                      }
+                    }]
+                  }
+                }]
+              }]
+            }
+          }]
+        }
+        EOF
+        )
         fi
 
-        # -------------------------
-        # Build final payload
-        # -------------------------
-        PAYLOAD=$(cat <<EOF
-        {
-          "cardsV2": [
-            {
-              "cardId": "build-status",
-              "card": {
-                "header": {
-                  "title": "GitHub Build Notification",
-                  "subtitle": "${{ github.repository }}",
-                  "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                  "imageType": "CIRCLE"
-                },
-                "sections": [
-                  {
-                    "header": "Build Details",
-                    "widgets": [
-                      {
-                        "keyValue": {
-                          "topLabel": "Branch",
-                          "content": "${{ github.ref_name }}"
-                        }
-                      },
-                      {
-                        "keyValue": {
-                          "topLabel": "Triggered by",
-                          "content": "${{ github.actor }}"
-                        }
-                      },
-                      {
-                        "keyValue": {
-                          "topLabel": "Status",
-                          "content": "${STATUS}"
-                        }
-                      }
-                    ]
-                  }
-                  $COMMITS_SECTION
-                  $FAILURE_SECTION
-                ]
-              }
-            }
-          ]
-        }
-EOF
-        )
-
-        # -------------------------
-        # Send to Google Chat
-        # -------------------------
-        curl -X POST \
+        # Send the message to Google Chat
+        WEBHOOK_URL="https://chat.googleapis.com/v1/spaces/$SPACE_ID/messages?key=$GOOGLE_CHAT_TOKEN"
+        
+        echo "Sending notification to Google Chat..."
+        RESPONSE=$(curl -s -X POST "$WEBHOOK_URL" \
           -H "Content-Type: application/json" \
-          -d "${PAYLOAD}" \
-          "${{ inputs.webhook-url }}"
+          -d "$CARD_CONTENT")
+        
+        if [[ $? -eq 0 ]]; then
+          echo "✅ Notification sent successfully!"
+          echo "Response: $RESPONSE"
+        else
+          echo "❌ Failed to send notification"
+          echo "Response: $RESPONSE"
+          exit 1
+        fi
+
+branding:
+  icon: 'message-circle'
+  color: 'blue'
