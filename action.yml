@@ -1,6 +1,6 @@
 name: "Google Chat Notify"
-author: "Your Name"
-description: "Send build/deploy notifications to Google Chat with status, branch, actor, and commits."
+author: "shreyngd"
+description: "Send build/deploy notifications to Google Chat with status, branch, actor, commits, and failure reason."
 branding:
   icon: "message-square"
   color: "blue"
@@ -9,29 +9,42 @@ inputs:
   webhook-url:
     description: "Google Chat Incoming Webhook URL"
     required: true
-  status:
-    description: "Build status (Success/Failure)"
-    required: true
-  branch:
-    description: "Branch name"
-    required: true
-  actor:
-    description: "User who triggered workflow"
-    required: true
-  repository:
-    description: "Repository name"
-    required: true
-  commits:
-    description: "List of commits in plain text/Markdown"
-    required: false
 
 runs:
   using: "composite"
   steps:
-    - name: Send notification to Google Chat
+    - name: Collect commits
+      id: commits
       shell: bash
       run: |
-        COMMITS_JSON=$(echo "${{ inputs.commits }}" | jq -Rs .)
+        echo "list<<EOF" >> $GITHUB_OUTPUT
+        for commit in $(jq -r '.commits[] | @base64' <<< '${{ toJson(github.event.commits) }}'); do
+          _jq() { echo $commit | base64 --decode | jq -r $1; }
+          SHA=$(_jq '.id' | cut -c1-7)
+          MESSAGE=$(_jq '.message' | head -c 80)
+          AUTHOR=$(_jq '.author.name')
+          echo "- [${SHA}](https://github.com/${{ github.repository }}/commit/${SHA}): ${MESSAGE} (by ${AUTHOR})" >> $GITHUB_OUTPUT
+        done
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Capture failure reason
+      if: failure()
+      id: failure-reason
+      shell: bash
+      run: |
+        echo "reason=Job ${{ github.job }} failed — check logs" >> $GITHUB_OUTPUT
+
+    - name: Send notification to Google Chat
+      if: always()
+      shell: bash
+      run: |
+        STATUS="✅ Success"
+        if [ "${{ job.status }}" != "success" ]; then
+          STATUS="❌ Failed"
+        fi
+
+        COMMITS_JSON=$(echo "${{ steps.commits.outputs.list }}" | jq -Rs .)
+        FAILURE_REASON="${{ steps.failure-reason.outputs.reason }}"
 
         PAYLOAD=$(cat <<EOF
         {
@@ -41,7 +54,7 @@ runs:
               "card": {
                 "header": {
                   "title": "GitHub Build Notification",
-                  "subtitle": "${{ inputs.repository }}",
+                  "subtitle": "${{ github.repository }}",
                   "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
                   "imageType": "CIRCLE"
                 },
@@ -52,24 +65,24 @@ runs:
                       {
                         "keyValue": {
                           "topLabel": "Branch",
-                          "content": "${{ inputs.branch }}"
+                          "content": "${{ github.ref_name }}"
                         }
                       },
                       {
                         "keyValue": {
                           "topLabel": "Triggered by",
-                          "content": "${{ inputs.actor }}"
+                          "content": "${{ github.actor }}"
                         }
                       },
                       {
                         "keyValue": {
                           "topLabel": "Status",
-                          "content": "${{ inputs.status }}"
+                          "content": "${STATUS}"
                         }
                       }
                     ]
                   }
-                  $(if [ -n "${{ inputs.commits }}" ]; then
+                  $(if [ -n "${COMMITS_JSON}" ]; then
                     cat <<COMMITS_SECTION
                   ,
                   {
@@ -83,6 +96,21 @@ runs:
                     ]
                   }
                   COMMITS_SECTION
+                  fi)
+                  $(if [ "${{ job.status }}" != "success" ] && [ -n "$FAILURE_REASON" ]; then
+                    cat <<FAIL_SECTION
+                  ,
+                  {
+                    "header": "Failure Reason",
+                    "widgets": [
+                      {
+                        "textParagraph": {
+                          "text": "$FAILURE_REASON"
+                        }
+                      }
+                    ]
+                  }
+                  FAIL_SECTION
                   fi)
                 ]
               }
