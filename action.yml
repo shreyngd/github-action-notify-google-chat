@@ -1,48 +1,4 @@
-name: "Google Chat Notify"
-author: "shreyngd"
-description: "Send build/deploy notifications to Google Chat with status, branch, actor, commits, and failure reason."
-branding:
-  icon: "message-square"
-  color: "blue"
-
-inputs:
-  webhook-url:
-    description: "Google Chat Incoming Webhook URL"
-    required: true
-
-runs:
-  using: "composite"
-  steps:
-    - name: Collect commits
-      id: commits
-      shell: bash
-      run: |
-        echo "list<<EOF" >> $GITHUB_OUTPUT
-
-        COMMITS_JSON='${{ toJson(github.event.commits) }}'
-
-        if [ "$COMMITS_JSON" = "null" ] || [ "$COMMITS_JSON" = "[]" ]; then
-          echo "_No commits found for this push event._" >> $GITHUB_OUTPUT
-        else
-          for commit in $(jq -r '.[] | @base64' <<< "$COMMITS_JSON"); do
-            _jq() { echo "$commit" | base64 --decode | jq -r "$1"; }
-            SHA=$(_jq '.id' | cut -c1-7)
-            MESSAGE=$(_jq '.message' | head -c 80)
-            AUTHOR=$(_jq '.author.name')
-            echo "- [${SHA}](https://github.com/${{ github.repository }}/commit/${SHA}): ${MESSAGE} (by ${AUTHOR})" >> $GITHUB_OUTPUT
-          done
-        fi
-
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Capture failure reason
-      if: failure()
-      id: failure-reason
-      shell: bash
-      run: |
-        echo "reason=Job ${{ github.job }} failed — check logs" >> $GITHUB_OUTPUT
-
-    name: "Notify Google Chat"
+name: "Notify Google Chat"
 description: "Send GitHub Actions build status to Google Chat"
 
 inputs:
